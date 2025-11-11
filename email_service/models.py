@@ -27,7 +27,7 @@ class EmailMessage(Base):
     to_email = Column(String(255), nullable=False, index=True)
     status = Column(Enum(EmailStatus), default=EmailStatus.queued, nullable=False, index=True)
     retry_count = Column(Integer, default=0)
-    metadata = Column(JSON, nullable=True)
+    additional_data = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -42,6 +42,6 @@ class EmailLog(Base):
     email_id = Column(UUID(as_uuid=True), ForeignKey("email_messages.id"), nullable=False)
     event = Column(String(50), nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    metadata = Column(JSON, nullable=True)
+    additional_data = Column(JSON, nullable=True)
 
     email_message = relationship("EmailMessage", back_populates="logs")
