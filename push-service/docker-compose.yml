@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: push-service-postgres
+    environment:
+      POSTGRES_USER: push_service
+      POSTGRES_PASSWORD: push_service_password
+      POSTGRES_DB: push_service
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U push_service"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - push-service-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: push-service-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - push-service-network
+
+  push-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: push-service-app
+    environment:
+      # Server
+      SERVER_PORT: "8080"
+      SERVER_MODE: "release"
+      
+      # Database
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: push_service
+      DB_PASSWORD: push_service_password
+      DB_NAME: push_service
+      DB_SSL_MODE: disable
+      
+      # RabbitMQ
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+      RABBITMQ_VHOST: /
+      
+      # FCM (set these via .env file in production)
+      FCM_USE_FILE: "true"
+      # FCM_CREDENTIALS_JSON and FCM_PROJECT_ID should be set via .env
+      
+      # Logging
+      LOG_LEVEL: "info"
+      LOG_FORMAT: "json"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount service account file if using file-based FCM credentials
+      - ./service-account.json:/app/service-account.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - push-service-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  push-service-network:
+    driver: bridge
+

@@ -1,0 +1,45 @@
+server:
+  port: "8080"
+  mode: "debug"
+  shutdown_timeout: "30s"
+
+database:
+  host: "localhost"
+  port: "5432"
+  name: "push_service"
+  ssl_mode: "disable"
+  max_open_conns: 25
+  max_idle_conns: 25
+  conn_max_lifetime: "5m"
+
+redis:
+  host: "localhost"
+  port: "6379"
+  db: 0
+
+rabbitmq:
+  host: "localhost"
+  port: "5672"
+  username: "guest"
+  password: "guest"
+  vhost: "/"
+
+queue:
+  worker:
+    prefetch_count: 10
+    poll_interval: "1s"
+    batch_size: 10
+  retry:
+    max_retries: 5
+    backoff: "5s"
+  validation:
+    enabled: true
+    timeout: "5s"
+
+fcm:
+  use_file: true
+  # credentials_json and project_id will come from environment variables
+
+log:
+  level: "info"
+  format: "json"

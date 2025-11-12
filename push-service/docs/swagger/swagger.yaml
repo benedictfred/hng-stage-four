@@ -1,0 +1,401 @@
+basePath: /
+definitions:
+  handlers.GetUserDevicesResponse:
+    description: User devices response
+    properties:
+      count:
+        example: 2
+        type: integer
+      devices:
+        items:
+          $ref: '#/definitions/models.DeviceResponse'
+        type: array
+      user_id:
+        example: user123
+        type: string
+    type: object
+  handlers.HealthResponse:
+    properties:
+      database:
+        example: healthy
+        type: string
+      status:
+        example: healthy
+        type: string
+      timestamp:
+        example: "2025-01-01T00:00:00Z"
+        type: string
+    type: object
+  handlers.RegisterDeviceResponse:
+    description: Device registration response
+    properties:
+      device:
+        $ref: '#/definitions/models.DeviceResponse'
+      message:
+        example: Device registered successfully
+        type: string
+    type: object
+  models.BulkPushRequest:
+    properties:
+      body:
+        type: string
+      data:
+        additionalProperties: {}
+        type: object
+      title:
+        type: string
+      user_ids:
+        items:
+          type: string
+        type: array
+    required:
+    - body
+    - title
+    - user_ids
+    type: object
+  models.CreateDeviceRequest:
+    properties:
+      platform:
+        enum:
+        - ios
+        - android
+        - web
+        type: string
+      token:
+        type: string
+      user_id:
+        type: string
+    required:
+    - platform
+    - token
+    - user_id
+    type: object
+  models.DeviceResponse:
+    properties:
+      id:
+        type: string
+      is_active:
+        type: boolean
+      platform:
+        type: string
+      token:
+        type: string
+      user_id:
+        type: string
+    type: object
+  models.SendPushRequest:
+    properties:
+      body:
+        type: string
+      data:
+        additionalProperties: {}
+        type: object
+      image:
+        type: string
+      link:
+        type: string
+      platforms:
+        description: Filter by specific platforms
+        items:
+          type: string
+        type: array
+      title:
+        type: string
+      user_id:
+        type: string
+    required:
+    - body
+    - title
+    - user_id
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+  description: |-
+    A microservice for sending push notifications via Firebase Cloud Messaging (FCM) with RabbitMQ queue support
+    Features:
+    - Device registration and management
+    - Queue-based push notification processing
+    - Token validation
+    - Rich notifications (title, body, image, link)
+    - Retry mechanism with dead letter queue
+    - Queue statistics
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  title: Push Notification Service API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      consumes:
+      - application/json
+      description: Returns the health status of the service
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.HealthResponse'
+      summary: Health check endpoint
+      tags:
+      - health
+  /ready:
+    get:
+      consumes:
+      - application/json
+      description: Returns the readiness status of the service including database
+        connectivity
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.HealthResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.HealthResponse'
+      summary: Readiness check endpoint
+      tags:
+      - health
+  /v1/devices:
+    get:
+      consumes:
+      - application/json
+      description: Get all registered devices for a user
+      parameters:
+      - description: User ID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.GetUserDevicesResponse'
+        "400":
+          description: User ID is required
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Failed to get user devices
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get user devices
+      tags:
+      - devices
+    post:
+      consumes:
+      - application/json
+      description: Register a device token for push notifications
+      parameters:
+      - description: Device registration request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateDeviceRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.RegisterDeviceResponse'
+        "400":
+          description: Invalid request body
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Failed to register device
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a new device
+      tags:
+      - devices
+  /v1/devices/{token}:
+    delete:
+      consumes:
+      - application/json
+      description: Unregister a device token (soft delete)
+      parameters:
+      - description: Device token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Device unregistered successfully
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Device token is required
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Failed to unregister device
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Unregister a device
+      tags:
+      - devices
+  /v1/push/send:
+    post:
+      consumes:
+      - application/json
+      description: Send a push notification to a user's devices via RabbitMQ queue
+      parameters:
+      - description: Push notification request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SendPushRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Push notification enqueued successfully
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Failed to send push notification
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send push notification
+      tags:
+      - push
+  /v1/push/send-bulk:
+    post:
+      consumes:
+      - application/json
+      description: Send push notifications to multiple users via RabbitMQ queue
+      parameters:
+      - description: Bulk push notification request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.BulkPushRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Bulk push notifications enqueued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Failed to send bulk push notifications
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send bulk push notifications
+      tags:
+      - push
+  /v1/push/test-direct:
+    post:
+      consumes:
+      - application/json
+      description: Send a test push notification directly via FCM (bypasses queue,
+        for testing only)
+      parameters:
+      - description: Direct send request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: FCM test message sent successfully
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: FCM send failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Test direct FCM send
+      tags:
+      - push
+  /v1/queue/stats:
+    get:
+      consumes:
+      - application/json
+      description: Get statistics for all push notification queues (main, retry, dead
+        letter)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Queue statistics
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Failed to get queue statistics
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get queue statistics
+      tags:
+      - queue
+schemes:
+- http
+- https
+swagger: "2.0"
