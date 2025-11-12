@@ -1,104 +1,120 @@
-# worker.py
-import os
 import json
-import time
 import pika
-from dotenv import load_dotenv
+from datetime import datetime
+
 from db import SessionLocal
 from models import EmailMessage, EmailStatus
 from services import send_email
-from queue import params, EXCHANGE, DLX_EXCHANGE, EMAIL_ROUTING_KEY
-from sqlalchemy.orm import Session
-from datetime import datetime
+from task_queue import get_connection, QUEUE_NAME
 
-load_dotenv()
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
-
-def process_email_message(body, properties):
-    payload = json.loads(body)
-    email_id = payload.get("email_id")
-    db: Session = SessionLocal()
+def process_email(email_id: str):
+    """
+    Process a single email:
+    1. Get email from database
+    2. Send it via SMTP
+    3. Update status in database
+    """
+    db = SessionLocal()
+    
     try:
+        # Get email from database
         email = db.query(EmailMessage).filter(EmailMessage.id == email_id).first()
+        
         if not email:
-            print(f"[worker] email not found in db {email_id}")
-            return True  # ack - nothing to do
-
-        # idempotency check: if already sent, ack
-        if email.status in (EmailStatus.sent, EmailStatus.delivered):
-            print(f"[worker] email {email_id} already sent")
-            return True
-
-        # mark processing
+            print(f"[worker] Email {email_id} not found in database")
+            return
+        
+        # Check if already sent
+        if email.status == EmailStatus.sent:
+            print(f"[worker] Email {email_id} already sent, skipping")
+            return
+        
+        # Update status to processing
         email.status = EmailStatus.processing
         db.commit()
-
-        # Send the email (replace with provider integration)
-        send_email(to=email.to_email, subject=email.subject or "", body=email.body or "")
-
+        print(f"[worker] Processing email {email_id} to {email.to_email}")
+        
+        # Send the email
+        send_email(
+            to_email=email.to_email,
+            subject=email.subject,
+            body=email.body
+        )
+        
+        # Update status to sent
         email.status = EmailStatus.sent
         email.sent_at = datetime.utcnow()
         db.commit()
-        print(f"[worker] email {email_id} sent")
-        return True
-
-    except Exception as exc:
-        # retry logic
-        retry_count = 0
-        if properties and properties.headers:
-            retry_count = int(properties.headers.get("retry_count", 0))
-        retry_count += 1
-
-        email.retry_count = retry_count
+        
+        print(f"[worker] ✓ Email {email_id} sent successfully!")
+        
+    except Exception as e:
+        # If anything fails, mark as failed
+        print(f"[worker] ✗ Failed to send email {email_id}: {str(e)}")
         email.status = EmailStatus.failed
-        email.error_message = str(exc)
+        email.error_message = str(e)
         db.commit()
-
-        if retry_count >= MAX_RETRIES:
-            print(f"[worker] moving {email_id} to dead-letter after {retry_count} retries")
-            return False  # signal to nack and let Rabbit route to DLQ (or handle explicit)
-        else:
-            backoff_seconds = (2 ** retry_count)
-            print(f"[worker] retrying {email_id} in {backoff_seconds}s (attempt {retry_count})")
-            time.sleep(backoff_seconds)
-            # Republish with increased header
-            conn = pika.BlockingConnection(params)
-            ch = conn.channel()
-            headers = properties.headers or {}
-            headers["retry_count"] = retry_count
-            ch.basic_publish(
-                exchange=EXCHANGE,
-                routing_key=EMAIL_ROUTING_KEY,
-                body=body,
-                properties=pika.BasicProperties(
-                    delivery_mode=2,
-                    headers=headers
-                )
-            )
-            conn.close()
-            return True
+        
     finally:
         db.close()
 
 def callback(ch, method, properties, body):
+    """
+    Callback function called by RabbitMQ when a message arrives.
+    """
     try:
-        ok = process_email_message(body, properties)
-        if ok:
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-        else:
-            # nack without requeue to allow DLX to capture (ensure queue DLX configured)
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        # Parse the message
+        message = json.loads(body)
+        email_id = message['email_id']
+        
+        print(f"\n[worker] Received email job: {email_id}")
+        
+        # Process the email
+        process_email(email_id)
+        
+        # Acknowledge message (remove from queue)
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        print(f"[worker] Message acknowledged\n")
+        
     except Exception as e:
-        print("Fatal worker error:", e)
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        print(f"[worker] Error processing message: {str(e)}")
+        # Acknowledge anyway to remove bad message from queue
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
-def run_worker():
-    conn = pika.BlockingConnection(params)
-    ch = conn.channel()
-    ch.basic_qos(prefetch_count=1)
-    ch.basic_consume(queue="email.queue", on_message_callback=callback)
-    print("[worker] waiting for messages...")
-    ch.start_consuming()
+def start_worker():
+    """
+    Start the worker - listens to the queue and processes emails.
+    """
+    print("=" * 50)
+    print("EMAIL WORKER STARTING")
+    print("=" * 50)
+    
+    # Connect to RabbitMQ
+    connection = get_connection()
+    channel = connection.channel()
+    
+    # Make sure queue exists
+    channel.queue_declare(queue=QUEUE_NAME, durable=True)
+    
+    # Process one message at a time
+    channel.basic_qos(prefetch_count=1)
+    
+    # Start consuming messages
+    channel.basic_consume(
+        queue=QUEUE_NAME,
+        on_message_callback=callback
+    )
+    
+    print(f"[worker] Listening to queue: {QUEUE_NAME}")
+    print("[worker] Waiting for emails... Press CTRL+C to exit\n")
+    
+    try:
+        channel.start_consuming()
+    except KeyboardInterrupt:
+        print("\n[worker] Shutting down...")
+        channel.stop_consuming()
+    finally:
+        connection.close()
 
 if __name__ == "__main__":
-    run_worker()
+    start_worker()

@@ -3,3 +3,8 @@ pydantic[email]
 pika
 fastapi
 uvicorn
+psycopg2-binary
+sqlalchemy
+pydantic
+pydantic[email]
+python-dotenv

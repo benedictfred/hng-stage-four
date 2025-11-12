@@ -1,64 +1,107 @@
-# main.py
-import os
-import json
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
-from db import Base, engine, get_db
+from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
-from dotenv import load_dotenv
-from models import EmailMessage, EmailStatus
-from schemas import EmailCreate, EmailResponse, StandardResponse
-from queue import setup_infrastructure, publish_email_job
 from uuid import uuid4
 from datetime import datetime
 
-load_dotenv()
+from db import Base, engine, get_db
+from models import EmailMessage, EmailStatus
+from schemas import EmailCreate, EmailResponse, StandardResponse
+from task_queue import setup_queue, publish_email_job
 
+
+print("[startup] Creating database tables...")
 Base.metadata.create_all(bind=engine)
-setup_infrastructure()
 
-app = FastAPI(title="email_service", version="1.0.0")
+
+print("[startup] Setting up RabbitMQ queue...")
+setup_queue()
+
+
+app = FastAPI(
+    title="Email Service",
+    description="Simple email notification service",
+    version="1.0.0"
+)
 
 @app.get("/health")
-def health():
-    return {"status": "ok"}
-
-@app.post("/internal/email/queue", response_model=StandardResponse, status_code=201)
-def enqueue_email(email: EmailCreate, db: Session = Depends(get_db)):
+def health_check():
     """
-    Enqueue email job coming from API Gateway or Notification Orchestrator.
-    This service stores the job in DB and pushes to RabbitMQ.
+    Health check endpoint - returns OK if service is running.
     """
-    # idempotency: if request_id exists, try to find existing record
-    if email.request_id:
-        existing = db.query(EmailMessage).filter(EmailMessage.request_id == email.request_id).first()
-        if existing:
-            return StandardResponse(success=True, data=EmailResponse.from_orm(existing), message="already_queued")
+    return {
+        "status": "ok",
+        "service": "email-service"
+    }
 
-    new_email = EmailMessage(
-        id=uuid4(),
-        request_id=email.request_id,
-        user_id=email.user_id,
-        template_code=email.template_code,
-        subject=email.subject,
-        body=email.body,
-        to_email=str(email.to_email),
-        status=EmailStatus.queued,
-        created_at=datetime.utcnow()
+@app.post("/email/queue", response_model=StandardResponse, status_code=201)
+def queue_email(email: EmailCreate, db: Session = Depends(get_db)):
+    """
+    Queue a new email for sending.
+    
+    This endpoint:
+    1. Saves email to database with status 'queued'
+    2. Publishes job to RabbitMQ
+    3. Returns the email details
+    
+    The worker will pick it up and actually send it.
+    """
+    try:
+        # Create new email record
+        new_email = EmailMessage(
+            id=uuid4(),
+            user_id=email.user_id,
+            to_email=str(email.to_email),
+            subject=email.subject,
+            body=email.body,
+            status=EmailStatus.queued,
+            created_at=datetime.utcnow()
+        )
+        
+        
+        db.add(new_email)
+        db.commit()
+        db.refresh(new_email)
+        
+        print(f"[api] Email saved to DB: {new_email.id}")
+        
+        
+        publish_email_job({
+            "email_id": str(new_email.id),
+            "to_email": new_email.to_email,
+            "subject": new_email.subject,
+            "body": new_email.body
+        })
+        
+        
+        return StandardResponse(
+            success=True,
+            data = EmailResponse.model_validate(email, from_attributes=True)
+,
+            message="Email queued successfully"
+        )
+        
+    except Exception as e:
+        db.rollback()
+        print(f"[api] Error queueing email: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/email/{email_id}", response_model=StandardResponse)
+def get_email_status(email_id: str, db: Session = Depends(get_db)):
+    """
+    Get the status of an email by its ID.
+    """
+    email = db.query(EmailMessage).filter(EmailMessage.id == email_id).first()
+    
+    if not email:
+        raise HTTPException(status_code=404, detail="Email not found")
+    
+    return StandardResponse(
+        success=True,
+        data = EmailResponse.model_validate(email, from_attributes=True)
+,
+        message="Email found"
     )
-    db.add(new_email)
-    db.commit()
-    db.refresh(new_email)
 
-    # publish to rabbitmq
-    publish_email_job({
-        "email_id": str(new_email.id),
-        "user_id": str(new_email.user_id),
-        "template_code": new_email.template_code,
-        "to_email": new_email.to_email,
-        "subject": new_email.subject,
-        "body": new_email.body,
-        "metadata": email.metadata or {}
-    }, request_id=email.request_id, priority=getattr(email, "priority", 0))
-
-    return StandardResponse(success=True, data=EmailResponse.from_orm(new_email), message="queued")
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

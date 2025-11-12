@@ -1,63 +1,49 @@
-# schemas.py
-from pydantic import BaseModel, EmailStr, HttpUrl
-from typing import Optional, Dict, Any
+from pydantic import BaseModel, EmailStr
 from uuid import UUID
 from datetime import datetime
-from enum import Enum
-
-class NotificationType(str, Enum):
-    email = "email"
-    push = "push"
-
-class UserData(BaseModel):
-    name: str
-    link: Optional[HttpUrl]
-    meta: Optional[Dict[str, Any]] = None
-
-class NotificationCreate(BaseModel):
-    notification_type: NotificationType
-    user_id: UUID
-    template_code: str
-    variables: UserData
-    request_id: str  # idempotency key
-    priority: Optional[int] = 0
-    metadata: Optional[Dict[str, Any]] = None
+from typing import Optional
 
 class EmailCreate(BaseModel):
+    """
+    Request format to queue a new email.
+    This is what the API Gateway will send to us.
+    """
     user_id: UUID
-    template_code: str
     to_email: EmailStr
-    subject: Optional[str]
-    body: Optional[str]
-    request_id: Optional[str]
-    metadata: Optional[Dict[str, Any]] = None
+    subject: str
+    body: str
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": "123e4567-e89b-12d3-a456-426614174000",
+                "to_email": "user@example.com",
+                "subject": "Welcome to our app!",
+                "body": "<h1>Welcome!</h1><p>Thanks for signing up.</p>"
+            }
+        }
 
 class EmailResponse(BaseModel):
+    """
+    Response format when returning email info.
+    """
     id: UUID
-    request_id: Optional[str]
     user_id: UUID
-    template_code: Optional[str]
-    subject: Optional[str]
-    to_email: EmailStr
+    to_email: str
+    subject: str
     status: str
-    retry_count: int
     created_at: datetime
-    updated_at: datetime
-
+    sent_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    
     class Config:
-        orm_mode = True
-
-class PaginationMeta(BaseModel):
-    total: int
-    limit: int
-    page: int
-    total_pages: int
-    has_next: bool
-    has_previous: bool
+        from_attributes = True
 
 class StandardResponse(BaseModel):
+    """
+    API response format
+    """
     success: bool
-    data: Optional[Any] = None
+    data: Optional[EmailResponse] = None
     error: Optional[str] = None
     message: str
-    meta: Optional[PaginationMeta] = None

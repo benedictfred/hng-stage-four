@@ -1,4 +1,5 @@
 services:
+  # PostgreSQL Database
   db:
     image: postgres:15
     environment:
@@ -8,39 +9,27 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # RabbitMQ Message Queue
   rabbitmq:
     image: rabbitmq:3-management
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
     ports:
-      - "5672:5672"
-      - "15672:15672"
-
-  redis:
-    image: redis:7
-    ports:
-      - "6379:6379"
-
-  email_service:
-    build: .
-    depends_on:
-      - db
-      - rabbitmq
-      - redis
-    environment:
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/email_service
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      REDIS_URL: redis://redis:6379/0
-      SMTP_HOST: smtp.gmail.com
-      SMTP_PORT: "587"
-      SMTP_USER: ""
-      SMTP_PASS: ""
-    ports:
-      - "8002:8000"
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+      - "5672:5672"   # RabbitMQ port
+      - "15672:15672" # Management UI (http://localhost:15672)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  db_data:
+  postgres_data:
