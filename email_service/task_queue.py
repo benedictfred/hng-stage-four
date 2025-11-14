@@ -69,7 +69,8 @@ def publish_email_job(email_data: dict):
     # delivery_mode=2 makes the message persistent
     channel.basic_publish(
         exchange='notifications.direct',  # Default exchange
-        routing_key=QUEUE_NAME,
+        # routing_key=QUEUE_NAME,
+        routing_key="email",
         body=message,
         properties=pika.BasicProperties(
             delivery_mode=2,  # Persistent
